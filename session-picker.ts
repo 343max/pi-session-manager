@@ -277,14 +277,14 @@ export default async function (pi: ExtensionAPI) {
     if (!sessionName) {
       // Fall back to the first user message
       for (const entry of entries) {
-        if (entry.type === "message" && entry.role === "user") {
+        if (entry.type === "message" && entry.message.role === "user") {
           const content =
-            typeof entry.content === "string"
-              ? entry.content
-              : Array.isArray(entry.content)
-                ? entry.content
-                    .filter((c: { type: string }) => c.type === "text")
-                    .map((c: { text: string }) => c.text)
+            typeof entry.message.content === "string"
+              ? entry.message.content
+              : Array.isArray(entry.message.content)
+                ? entry.message.content
+                    .filter((c): c is { type: "text"; text: string } => c.type === "text")
+                    .map((c) => c.text)
                     .join(" ")
                 : "";
           sessionName = content.slice(0, 50);
