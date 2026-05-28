@@ -190,13 +190,7 @@ async function resolveAndActivate(
 }
 
 async function showPickerAndSpawn(ctx: ExtensionContext): Promise<void> {
-  const sessionFile = ctx.sessionManager.getSessionFile();
-  const currentSessionId = sessionFile
-    ? sessionFile
-        .replace(/\.jsonl?$/, "")
-        .split("/")
-        .pop()
-    : undefined;
+  const currentSessionId = ctx.sessionManager.getSessionId() || undefined;
 
   const combined = await getCombinedSessionList({ excludeSessionId: currentSessionId });
 
@@ -291,13 +285,7 @@ export default async function (pi: ExtensionAPI) {
     if (!sessionFile) return; // ephemeral session — skip
 
     const entries = sessionManager.getEntries();
-    // extract session id from the session file path
-    // SessionManager.getSessionFile() returns the full path, the session ID is the filename stem
-    const sessionId =
-      sessionFile
-        .replace(/\.jsonl?$/, "")
-        .split("/")
-        .pop() || "unknown";
+    const sessionId = sessionManager.getSessionId() || "unknown";
 
     // Try to get the current name (set via /name or session metadata)
     let sessionName = pi.getSessionName() || "";
