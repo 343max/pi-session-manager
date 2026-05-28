@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { SessionInfo } from "@earendil-works/pi-coding-agent";
 import { spawn } from "child_process";
+import type { ActiveSessionInfo } from "./running-sessions";
 import {
   registerSession,
   deregisterSession,
@@ -145,8 +146,8 @@ async function showPickerAndSpawn(ctx: ExtensionContext): Promise<void> {
     if (a.sessionId === currentSessionId) continue;
     shownIds.add(a.sessionId);
     const hist = recent.find((s) => s.id === a.sessionId);
-    // Prefer SessionManager name (always current, picks up /name changes), then stored fallback
-    const name = hist?.name || hist?.firstMessage?.slice(0, 50) || a.sessionName || "new session";
+    // Prefer running-sessions name (refreshed on agent_end), then SessionManager, then fallbacks
+    const name = a.sessionName || hist?.name || hist?.firstMessage?.slice(0, 50) || "new session";
     combined.push({
       session:
         hist ??
@@ -201,6 +202,19 @@ async function showPickerAndSpawn(ctx: ExtensionContext): Promise<void> {
     if (!result.ok) {
       ctx.ui.notify(`Failed to spawn wezterm: ${result.error}`, "error");
     }
+  }
+}
+
+// ── Name refresh tracking ──────────────────────────────────────────
+
+let currentSessionInfo: ActiveSessionInfo | null = null;
+
+function refreshSessionName(pi: ExtensionAPI): void {
+  if (!currentSessionInfo) return;
+  const name = pi.getSessionName() || "";
+  if (name && name !== currentSessionInfo.sessionName) {
+    currentSessionInfo = { ...currentSessionInfo, sessionName: name };
+    registerSession(currentSessionInfo);
   }
 }
 
@@ -299,7 +313,7 @@ export default async function (pi: ExtensionAPI) {
     // Clean up stale entries from previous crashes
     cleanupStaleSessions();
 
-    registerSession({
+    currentSessionInfo = {
       sessionId,
       sessionName,
       cwd: ctx.cwd,
@@ -307,7 +321,8 @@ export default async function (pi: ExtensionAPI) {
       paneId,
       pid: process.pid,
       startedAt: new Date().toISOString(),
-    });
+    };
+    registerSession(currentSessionInfo);
   });
 
   // Deregister on session_shutdown
@@ -322,6 +337,12 @@ export default async function (pi: ExtensionAPI) {
         .split("/")
         .pop() || "unknown";
     deregisterSession(sessionId);
+    currentSessionInfo = null;
+  });
+
+  // Refresh running-sessions name when the prompt input reappears after agent work
+  pi.on("agent_end", () => {
+    refreshSessionName(pi);
   });
 
   // Show picker on --session-pick flag
