@@ -1,6 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import type { SessionInfo } from "@earendil-works/pi-coding-agent";
 import { spawn } from "child_process";
 import type { ActiveSessionInfo } from "./running-sessions";
 import {
@@ -8,24 +7,68 @@ import {
   deregisterSession,
   cleanupStaleSessions,
   listActiveSessions,
-  getActiveSessionIds,
 } from "./running-sessions";
 
 const MAX_SESSIONS = 20;
 
-function sessionToJSON(s: SessionInfo, activeIds: Set<string>): Record<string, unknown> {
-  const status = activeIds.has(s.id) ? "active" : "stopped";
-  return {
-    id: s.id,
-    name: s.name || s.firstMessage?.slice(0, 50) || null,
-    cwd: s.cwd,
-    created: s.created.toISOString(),
-    modified: s.modified.toISOString(),
-    messageCount: s.messageCount,
-    firstMessage: s.firstMessage || null,
-    path: s.path,
-    status,
-  };
+// ── Shared session list helper ──────────────────────────────────────
+
+interface SessionListEntry {
+  sessionId: string;
+  sessionName: string | null;
+  cwd: string;
+  status: "running" | "stopped";
+  focusable: boolean;
+  created?: string;
+  modified?: string;
+}
+
+async function getCombinedSessionList(opts?: {
+  excludeSessionId?: string;
+}): Promise<SessionListEntry[]> {
+  const sessions = await SessionManager.listAll();
+  const recent = sessions.slice(0, MAX_SESSIONS);
+  const activeSessions = listActiveSessions();
+  const activeIds = new Set(activeSessions.map((s) => s.sessionId));
+
+  const combined: SessionListEntry[] = [];
+  const shownIds = new Set<string>();
+
+  // Active sessions first
+  for (const a of activeSessions) {
+    if (a.sessionId === opts?.excludeSessionId) continue;
+    shownIds.add(a.sessionId);
+    const hist = recent.find((s) => s.id === a.sessionId);
+    const name =
+      a.sessionName || hist?.name || hist?.firstMessage?.slice(0, 50) || "new session";
+    combined.push({
+      sessionId: a.sessionId,
+      sessionName: name,
+      cwd: a.cwd,
+      status: "running",
+      focusable: a.terminal === "wezterm" && a.paneId !== null,
+      created: hist ? hist.created.toISOString() : undefined,
+      modified: hist ? hist.modified.toISOString() : undefined,
+    });
+  }
+
+  // Historical sessions (deduplicated)
+  for (const s of recent) {
+    if (shownIds.has(s.id) || activeIds.has(s.id)) continue;
+    shownIds.add(s.id);
+    const name = s.name || s.firstMessage?.slice(0, 50) || s.id.slice(0, 8) + "...";
+    combined.push({
+      sessionId: s.id,
+      sessionName: name,
+      cwd: s.cwd,
+      status: "stopped",
+      focusable: true,
+      created: s.created.toISOString(),
+      modified: s.modified.toISOString(),
+    });
+  }
+
+  return combined;
 }
 
 // ── Activation ──────────────────────────────────────────────────────
@@ -111,75 +154,24 @@ async function resolveAndActivate(
 }
 
 async function showPickerAndSpawn(ctx: ExtensionContext): Promise<void> {
-  const sessions = await SessionManager.listAll();
+  const sessionFile = ctx.sessionManager.getSessionFile();
+  const currentSessionId = sessionFile
+    ? sessionFile.replace(/\.jsonl?$/, "").split("/").pop()
+    : undefined;
 
-  if (sessions.length === 0) {
+  const combined = await getCombinedSessionList({ excludeSessionId: currentSessionId });
+
+  if (combined.length === 0) {
     ctx.ui.notify("No sessions found", "warning");
     return;
   }
 
-  const recent = sessions.slice(0, MAX_SESSIONS);
-  const activeSessions = listActiveSessions();
-  const activeIds = new Set(activeSessions.map((s) => s.sessionId));
+  const choices = combined.map((c) =>
+    c.status === "running"
+      ? `🟢 ${c.sessionName}  —  ${c.cwd}`
+      : `   ${c.sessionName}  —  ${c.cwd}`,
+  );
 
-  // Get the current session ID so we can filter it out (don't show yourself)
-  const sessionFile = ctx.sessionManager.getSessionFile();
-  const currentSessionId = sessionFile
-    ? sessionFile
-        .replace(/\.jsonl?$/, "")
-        .split("/")
-        .pop()
-    : undefined;
-
-  // Build combined list: active first, then inactive historical (deduplicated)
-  const combined: Array<{
-    session: SessionInfo;
-    active: boolean;
-    paneId?: string;
-    terminal?: string;
-    display: string;
-  }> = [];
-  const shownIds = new Set<string>();
-
-  // Active sessions (filter out current)
-  for (const a of activeSessions) {
-    if (a.sessionId === currentSessionId) continue;
-    shownIds.add(a.sessionId);
-    const hist = recent.find((s) => s.id === a.sessionId);
-    // Prefer running-sessions name (refreshed on agent_end), then SessionManager, then fallbacks
-    const name = a.sessionName || hist?.name || hist?.firstMessage?.slice(0, 50) || "new session";
-    combined.push({
-      session:
-        hist ??
-        ({
-          id: a.sessionId,
-          name: a.sessionName,
-          cwd: a.cwd,
-          created: new Date(a.startedAt),
-          modified: new Date(a.startedAt),
-          messageCount: 0,
-          path: "",
-        } as SessionInfo),
-      active: true,
-      paneId: a.paneId ?? undefined,
-      terminal: a.terminal,
-      display: `🟢 ${name}  —  ${a.cwd}`,
-    });
-  }
-
-  // Inactive historical (skip ones already shown as active)
-  for (const s of recent) {
-    if (shownIds.has(s.id) || activeIds.has(s.id)) continue;
-    shownIds.add(s.id);
-    const name = s.name || s.firstMessage?.slice(0, 50) || s.id.slice(0, 8) + "...";
-    combined.push({
-      session: s,
-      active: false,
-      display: `   ${name}  —  ${s.cwd}`,
-    });
-  }
-
-  const choices = combined.map((c) => c.display);
   const picked = await ctx.ui.select("Pick a session", choices);
   if (picked === undefined) return;
 
@@ -188,17 +180,18 @@ async function showPickerAndSpawn(ctx: ExtensionContext): Promise<void> {
 
   const entry = combined[index];
 
-  if (entry.active) {
-    if (entry.terminal === "wezterm" && entry.paneId) {
-      const result = await activatePane(entry.paneId);
+  if (entry.status === "running" && entry.focusable) {
+    const active = listActiveSessions().find((s) => s.sessionId === entry.sessionId);
+    if (active?.paneId) {
+      const result = await activatePane(active.paneId);
       if (!result.ok) {
         ctx.ui.notify(`Failed to activate pane: ${result.error}`, "error");
       }
-    } else {
-      ctx.ui.notify("Session is running but terminal type is unknown — can't switch", "warning");
     }
+  } else if (entry.status === "running") {
+    ctx.ui.notify("Session is running but terminal type is unknown — can't switch", "warning");
   } else {
-    const result = await spawnInWezterm(entry.session.cwd, entry.session.id);
+    const result = await spawnInWezterm(entry.cwd, entry.sessionId);
     if (!result.ok) {
       ctx.ui.notify(`Failed to spawn wezterm: ${result.error}`, "error");
     }
@@ -223,16 +216,8 @@ function refreshSessionName(pi: ExtensionAPI): void {
 export default async function (pi: ExtensionAPI) {
   // --session-pick-json: output JSON and exit (before TUI starts)
   if (process.argv.includes("--session-pick-json")) {
-    const sessions = await SessionManager.listAll();
-    const recent = sessions.slice(0, MAX_SESSIONS);
-    const activeIds = getActiveSessionIds();
-    console.log(
-      JSON.stringify(
-        recent.map((s) => sessionToJSON(s, activeIds)),
-        null,
-        2,
-      ),
-    );
+    const list = await getCombinedSessionList();
+    console.log(JSON.stringify(list, null, 2));
     process.exit(0);
   }
 
