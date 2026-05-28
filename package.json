@@ -5,6 +5,6 @@
   "keywords": ["pi-package"],
   "license": "MIT",
   "pi": {
-    "extensions": [".pi/extensions"]
+    "extensions": ["./session-picker.ts"]
   }
 }
