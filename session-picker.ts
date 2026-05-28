@@ -52,11 +52,10 @@ function spawnInWezterm(cwd: string, sessionId: string): Promise<{ ok: boolean; 
 
     cli.on("error", () => {
       // cli spawn might fail if no GUI wezterm is running — try start
-      const win = spawn(
-        "wezterm",
-        ["start", "--cwd", cwd, "--", "pi", "--session", sessionId],
-        { stdio: "ignore", detached: true },
-      );
+      const win = spawn("wezterm", ["start", "--cwd", cwd, "--", "pi", "--session", sessionId], {
+        stdio: "ignore",
+        detached: true,
+      });
       win.on("error", () => resolve({ ok: false, error: "wezterm not found" }));
       win.on("close", (code) =>
         resolve({
@@ -125,7 +124,10 @@ async function showPickerAndSpawn(ctx: ExtensionContext): Promise<void> {
   // Get the current session ID so we can filter it out (don't show yourself)
   const sessionFile = ctx.sessionManager.getSessionFile();
   const currentSessionId = sessionFile
-    ? sessionFile.replace(/\.jsonl?$/, "").split("/").pop()
+    ? sessionFile
+        .replace(/\.jsonl?$/, "")
+        .split("/")
+        .pop()
     : undefined;
 
   // Build combined list: active first, then inactive historical (deduplicated)
@@ -136,26 +138,27 @@ async function showPickerAndSpawn(ctx: ExtensionContext): Promise<void> {
     terminal?: string;
     display: string;
   }> = [];
+  const shownIds = new Set<string>();
 
   // Active sessions (filter out current)
   for (const a of activeSessions) {
     if (a.sessionId === currentSessionId) continue;
+    shownIds.add(a.sessionId);
     const hist = recent.find((s) => s.id === a.sessionId);
-    const name =
-      a.sessionName ||
-      hist?.name ||
-      hist?.firstMessage?.slice(0, 50) ||
-      a.sessionId.slice(0, 8) + "...";
+    // Prefer SessionManager name (always current, picks up /name changes), then stored fallback
+    const name = hist?.name || hist?.firstMessage?.slice(0, 50) || a.sessionName || "new session";
     combined.push({
-      session: hist ?? ({
-        id: a.sessionId,
-        name: a.sessionName,
-        cwd: a.cwd,
-        created: new Date(a.startedAt),
-        modified: new Date(a.startedAt),
-        messageCount: 0,
-        path: "",
-      } as SessionInfo),
+      session:
+        hist ??
+        ({
+          id: a.sessionId,
+          name: a.sessionName,
+          cwd: a.cwd,
+          created: new Date(a.startedAt),
+          modified: new Date(a.startedAt),
+          messageCount: 0,
+          path: "",
+        } as SessionInfo),
       active: true,
       paneId: a.paneId ?? undefined,
       terminal: a.terminal,
@@ -165,7 +168,8 @@ async function showPickerAndSpawn(ctx: ExtensionContext): Promise<void> {
 
   // Inactive historical (skip ones already shown as active)
   for (const s of recent) {
-    if (activeIds.has(s.id)) continue;
+    if (shownIds.has(s.id) || activeIds.has(s.id)) continue;
+    shownIds.add(s.id);
     const name = s.name || s.firstMessage?.slice(0, 50) || s.id.slice(0, 8) + "...";
     combined.push({
       session: s,
@@ -190,10 +194,7 @@ async function showPickerAndSpawn(ctx: ExtensionContext): Promise<void> {
         ctx.ui.notify(`Failed to activate pane: ${result.error}`, "error");
       }
     } else {
-      ctx.ui.notify(
-        "Session is running but terminal type is unknown — can't switch",
-        "warning",
-      );
+      ctx.ui.notify("Session is running but terminal type is unknown — can't switch", "warning");
     }
   } else {
     const result = await spawnInWezterm(entry.session.cwd, entry.session.id);
@@ -211,7 +212,13 @@ export default async function (pi: ExtensionAPI) {
     const sessions = await SessionManager.listAll();
     const recent = sessions.slice(0, MAX_SESSIONS);
     const activeIds = getActiveSessionIds();
-    console.log(JSON.stringify(recent.map((s) => sessionToJSON(s, activeIds)), null, 2));
+    console.log(
+      JSON.stringify(
+        recent.map((s) => sessionToJSON(s, activeIds)),
+        null,
+        2,
+      ),
+    );
     process.exit(0);
   }
 
@@ -259,23 +266,30 @@ export default async function (pi: ExtensionAPI) {
     const entries = sessionManager.getEntries();
     // extract session id from the session file path
     // SessionManager.getSessionFile() returns the full path, the session ID is the filename stem
-    const sessionId = sessionFile.replace(/\.jsonl?$/, "").split("/").pop() || "unknown";
+    const sessionId =
+      sessionFile
+        .replace(/\.jsonl?$/, "")
+        .split("/")
+        .pop() || "unknown";
 
-    // Try to get a name from the first user message
-    let sessionName = "";
-    for (const entry of entries) {
-      if (entry.type === "message" && entry.role === "user") {
-        const content =
-          typeof entry.content === "string"
-            ? entry.content
-            : Array.isArray(entry.content)
+    // Try to get the current name (set via /name or session metadata)
+    let sessionName = pi.getSessionName() || "";
+    if (!sessionName) {
+      // Fall back to the first user message
+      for (const entry of entries) {
+        if (entry.type === "message" && entry.role === "user") {
+          const content =
+            typeof entry.content === "string"
               ? entry.content
-                  .filter((c: { type: string }) => c.type === "text")
-                  .map((c: { text: string }) => c.text)
-                  .join(" ")
-              : "";
-        sessionName = content.slice(0, 50);
-        break;
+              : Array.isArray(entry.content)
+                ? entry.content
+                    .filter((c: { type: string }) => c.type === "text")
+                    .map((c: { text: string }) => c.text)
+                    .join(" ")
+                : "";
+          sessionName = content.slice(0, 50);
+          break;
+        }
       }
     }
 
@@ -302,7 +316,11 @@ export default async function (pi: ExtensionAPI) {
     const sessionFile = sessionManager.getSessionFile();
     if (!sessionFile) return;
 
-    const sessionId = sessionFile.replace(/\.jsonl?$/, "").split("/").pop() || "unknown";
+    const sessionId =
+      sessionFile
+        .replace(/\.jsonl?$/, "")
+        .split("/")
+        .pop() || "unknown";
     deregisterSession(sessionId);
   });
 
