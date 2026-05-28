@@ -1,3 +1,4 @@
+import { writeSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { spawn } from "child_process";
@@ -215,9 +216,12 @@ function refreshSessionName(pi: ExtensionAPI): void {
 
 export default async function (pi: ExtensionAPI) {
   // --session-pick-json: output JSON and exit (before TUI starts)
+  // Use writeSync(fd 1) to write directly to stdout, bypassing pi's
+  // takeOverStdout() which redirects process.stdout.write → stderr in
+  // non-interactive modes (e.g. when piping: pi --session-pick-json | jq).
   if (process.argv.includes("--session-pick-json")) {
     const list = await getCombinedSessionList();
-    console.log(JSON.stringify(list, null, 2));
+    writeSync(1, JSON.stringify(list, null, 2) + "\n");
     process.exit(0);
   }
 
