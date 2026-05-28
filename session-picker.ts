@@ -1,7 +1,7 @@
 import { writeSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { spawn } from "child_process";
+import { exec, spawn } from "child_process";
 import type { ActiveSessionInfo } from "./running-sessions";
 import {
   registerSession,
@@ -72,6 +72,14 @@ async function getCombinedSessionList(opts?: {
   return combined;
 }
 
+// ── macOS app focus ───────────────────────────────────────────────
+
+function focusWezTerm() {
+  if (process.platform === "darwin") {
+    exec("open -a WezTerm");
+  }
+}
+
 // ── Activation ──────────────────────────────────────────────────────
 
 function activatePane(paneId: string): Promise<{ ok: boolean; error?: string }> {
@@ -81,9 +89,10 @@ function activatePane(paneId: string): Promise<{ ok: boolean; error?: string }> 
       detached: true,
     });
     cli.on("error", () => resolve({ ok: false, error: "wezterm not found" }));
-    cli.on("close", (code) =>
-      resolve({ ok: code === 0, error: code !== 0 ? `exit code ${code}` : undefined }),
-    );
+    cli.on("close", (code) => {
+      if (code === 0) focusWezTerm();
+      resolve({ ok: code === 0, error: code !== 0 ? `exit code ${code}` : undefined });
+    });
   });
 }
 
@@ -102,20 +111,22 @@ function spawnInWezterm(cwd: string, sessionId: string): Promise<{ ok: boolean; 
         detached: true,
       });
       win.on("error", () => resolve({ ok: false, error: "wezterm not found" }));
-      win.on("close", (code) =>
+      win.on("close", (code) => {
+        if (code === 0) focusWezTerm();
         resolve({
           ok: code === 0,
           error: code !== 0 ? `exit code ${code}` : undefined,
-        }),
-      );
+        });
+      });
     });
 
-    cli.on("close", (code) =>
+    cli.on("close", (code) => {
+      if (code === 0) focusWezTerm();
       resolve({
         ok: code === 0,
         error: code !== 0 ? `exit code ${code}` : undefined,
-      }),
-    );
+      });
+    });
   });
 }
 
