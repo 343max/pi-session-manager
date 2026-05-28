@@ -43,13 +43,8 @@ async function showPickerAndSpawn(ctx: ExtensionContext): Promise<void> {
   await openInWezterm(session.cwd, session.id, ctx);
 }
 
-function openInWezterm(
-  cwd: string,
-  sessionId: string,
-  ctx: ExtensionContext,
-): Promise<void> {
+function openInWezterm(cwd: string, sessionId: string, ctx: ExtensionContext): Promise<void> {
   return new Promise((resolve) => {
-    // Try wezterm cli spawn (existing multiplexer / tab)
     const cli = spawn(
       "wezterm",
       ["cli", "spawn", "--cwd", cwd, "--", "pi", "--session", sessionId],
@@ -57,7 +52,6 @@ function openInWezterm(
     );
 
     cli.on("error", () => {
-      // wezterm not installed or not found
       ctx.ui.notify("wezterm not found — is it installed?", "error");
       resolve();
     });
@@ -67,12 +61,10 @@ function openInWezterm(
         resolve();
         return;
       }
-      // cli spawn failed (no multiplexer running) — fall back to new window
-      const win = spawn(
-        "wezterm",
-        ["start", "--cwd", cwd, "--", "pi", "--session", sessionId],
-        { stdio: "ignore", detached: true },
-      );
+      const win = spawn("wezterm", ["start", "--cwd", cwd, "--", "pi", "--session", sessionId], {
+        stdio: "ignore",
+        detached: true,
+      });
 
       win.on("error", () => {
         ctx.ui.notify("Failed to open wezterm", "error");
@@ -84,15 +76,18 @@ function openInWezterm(
   });
 }
 
-export default function (pi: ExtensionAPI) {
+export default async function (pi: ExtensionAPI) {
+  // Parse --session-pick-json from argv before the TUI starts.
+  // pi.getFlag() is not yet populated at factory time, so we read process.argv directly.
+  if (process.argv.includes("--session-pick-json")) {
+    const sessions = await SessionManager.listAll();
+    const recent = sessions.slice(0, MAX_SESSIONS);
+    console.log(JSON.stringify(recent.map(sessionToJSON), null, 2));
+    process.exit(0);
+  }
+
   pi.registerFlag("session-pick", {
     description: "Open session picker and resume in a new WezTerm tab",
-    type: "boolean",
-    default: false,
-  });
-
-  pi.registerFlag("session-pick-json", {
-    description: "Output recent sessions as JSON (for scripting)",
     type: "boolean",
     default: false,
   });
@@ -105,14 +100,6 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (_event, ctx) => {
-    if (pi.getFlag("session-pick-json")) {
-      const sessions = await SessionManager.listAll();
-      const recent = sessions.slice(0, MAX_SESSIONS);
-      console.log(JSON.stringify(recent.map(sessionToJSON), null, 2));
-      ctx.shutdown();
-      return;
-    }
-
     if (pi.getFlag("session-pick")) {
       await showPickerAndSpawn(ctx);
       ctx.shutdown();

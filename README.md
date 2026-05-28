@@ -30,7 +30,7 @@ All show your last 20 sessions sorted by recency, with name and working director
 
 ```bash
 # Pipe to jq for scripting
-pi --session-pick-json 2>&1 | jq '.[0].id'
+pi --session-pick-json | jq '.[0].id'
 ```
 
 Pick one from the interactive picker → a new WezTerm tab opens with `pi --session <id>` continuing that session.
