@@ -1,8 +1,22 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { SessionInfo } from "@earendil-works/pi-coding-agent";
 import { spawn } from "child_process";
 
 const MAX_SESSIONS = 20;
+
+function sessionToJSON(s: SessionInfo): Record<string, unknown> {
+  return {
+    id: s.id,
+    name: s.name || s.firstMessage?.slice(0, 50) || null,
+    cwd: s.cwd,
+    created: s.created.toISOString(),
+    modified: s.modified.toISOString(),
+    messageCount: s.messageCount,
+    firstMessage: s.firstMessage || null,
+    path: s.path,
+  };
+}
 
 async function showPickerAndSpawn(ctx: ExtensionContext): Promise<void> {
   const sessions = await SessionManager.listAll();
@@ -77,6 +91,12 @@ export default function (pi: ExtensionAPI) {
     default: false,
   });
 
+  pi.registerFlag("session-pick-json", {
+    description: "Output recent sessions as JSON (for scripting)",
+    type: "boolean",
+    default: false,
+  });
+
   pi.registerCommand("session-pick", {
     description: "Pick a session and open in a new WezTerm tab",
     handler: async (_args, ctx) => {
@@ -85,6 +105,14 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    if (pi.getFlag("session-pick-json")) {
+      const sessions = await SessionManager.listAll();
+      const recent = sessions.slice(0, MAX_SESSIONS);
+      console.log(JSON.stringify(recent.map(sessionToJSON), null, 2));
+      ctx.shutdown();
+      return;
+    }
+
     if (pi.getFlag("session-pick")) {
       await showPickerAndSpawn(ctx);
       ctx.shutdown();

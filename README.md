@@ -23,11 +23,17 @@ pi install git:github.com/343max/pi-session-manager
 | Method | What it does |
 |--------|-------------|
 | `pi --session-pick` | Launch pi, immediately show the picker, spawns wezterm, then exits |
+| `pi --session-pick-json` | Output last 20 sessions as JSON (for scripting) |
 | `/session-pick` | Show the picker inside an already-running pi session |
 
-Both show your last 20 sessions sorted by recency, with name and working directory.
+All show your last 20 sessions sorted by recency, with name and working directory.
 
-Pick one → a new WezTerm tab opens with `pi --session <id>` continuing that session.
+```bash
+# Pipe to jq for scripting
+pi --session-pick-json 2>&1 | jq '.[0].id'
+```
+
+Pick one from the interactive picker → a new WezTerm tab opens with `pi --session <id>` continuing that session.
 
 ## Requirements
 
