@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFile } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -12,18 +12,13 @@ interface ActiveSessionInfo {
   paneId: string | null;
   pid: number;
   startedAt: string;
+  unreadOutput: boolean;
 }
 
 function ensureDir(): void {
   if (!existsSync(RUNNING_DIR)) {
     mkdirSync(RUNNING_DIR, { recursive: true });
   }
-}
-
-export function registerSession(info: ActiveSessionInfo): void {
-  ensureDir();
-  const file = join(RUNNING_DIR, `${info.sessionId}.json`);
-  writeFileSync(file, JSON.stringify(info, null, 2));
 }
 
 export function deregisterSession(sessionId: string): void {
@@ -89,6 +84,43 @@ export function listActiveSessions(): ActiveSessionInfo[] {
 
 export function getActiveSessionIds(): Set<string> {
   return new Set(listActiveSessions().map((s) => s.sessionId));
+}
+
+// ── In-memory session state manager ──────────────────────────────
+
+let currentState: ActiveSessionInfo | null = null;
+
+/** Write state to disk. Async, fire-and-forget. */
+function writeSessionState(state: ActiveSessionInfo): void {
+  ensureDir();
+  const file = join(RUNNING_DIR, `${state.sessionId}.json`);
+  writeFile(file, JSON.stringify(state, null, 2), () => {});
+}
+
+/** Set initial state and write to disk. */
+export function initSessionState(info: ActiveSessionInfo): void {
+  currentState = info;
+  writeSessionState(info);
+}
+
+/** Merge partial update into in-memory state and write to disk. */
+export function updateSessionState(update: Partial<ActiveSessionInfo>): void {
+  if (!currentState) return;
+  currentState = { ...currentState, ...update };
+  writeSessionState(currentState);
+}
+
+/** Read current in-memory state. */
+export function getSessionState(): ActiveSessionInfo | null {
+  return currentState;
+}
+
+/** Deregister and clear. */
+export function clearSessionState(): void {
+  if (currentState) {
+    deregisterSession(currentState.sessionId);
+  }
+  currentState = null;
 }
 
 export type { ActiveSessionInfo };

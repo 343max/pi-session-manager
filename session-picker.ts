@@ -1,11 +1,13 @@
 import { writeSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { CustomEditor, SessionManager } from "@earendil-works/pi-coding-agent";
 import { exec, spawn } from "child_process";
 import type { ActiveSessionInfo } from "./running-sessions";
 import {
-  registerSession,
-  deregisterSession,
+  initSessionState,
+  updateSessionState,
+  getSessionState,
+  clearSessionState,
   cleanupStaleSessions,
   listActiveSessions,
 } from "./running-sessions";
@@ -20,6 +22,7 @@ interface SessionListEntry {
   cwd: string;
   status: "running" | "stopped";
   focusable: boolean;
+  unreadOutput: boolean;
   created?: string;
   modified?: string;
 }
@@ -40,14 +43,14 @@ async function getCombinedSessionList(opts?: {
     if (a.sessionId === opts?.excludeSessionId) continue;
     shownIds.add(a.sessionId);
     const hist = recent.find((s) => s.id === a.sessionId);
-    const name =
-      a.sessionName || hist?.name || hist?.firstMessage?.slice(0, 50) || "new session";
+    const name = a.sessionName || hist?.name || hist?.firstMessage?.slice(0, 50) || "new session";
     combined.push({
       sessionId: a.sessionId,
       sessionName: name,
       cwd: a.cwd,
       status: "running",
       focusable: a.terminal === "wezterm" && a.paneId !== null,
+      unreadOutput: a.unreadOutput === true,
       created: hist ? hist.created.toISOString() : undefined,
       modified: hist ? hist.modified.toISOString() : undefined,
     });
@@ -64,6 +67,7 @@ async function getCombinedSessionList(opts?: {
       cwd: s.cwd,
       status: "stopped",
       focusable: true,
+      unreadOutput: false,
       created: s.created.toISOString(),
       modified: s.modified.toISOString(),
     });
@@ -71,6 +75,26 @@ async function getCombinedSessionList(opts?: {
 
   return combined;
 }
+
+// ── Unread-tracking editor ────────────────────────────────────────
+
+class UnreadTrackingEditor extends CustomEditor {
+  private clearOnNextInput = false;
+
+  handleInput(data: string): void {
+    if (this.clearOnNextInput) {
+      this.clearOnNextInput = false;
+      updateSessionState({ unreadOutput: false });
+    }
+    super.handleInput(data);
+  }
+
+  armClear(): void {
+    this.clearOnNextInput = true;
+  }
+}
+
+let currentEditor: UnreadTrackingEditor | null = null;
 
 // ── macOS app focus ───────────────────────────────────────────────
 
@@ -168,7 +192,10 @@ async function resolveAndActivate(
 async function showPickerAndSpawn(ctx: ExtensionContext): Promise<void> {
   const sessionFile = ctx.sessionManager.getSessionFile();
   const currentSessionId = sessionFile
-    ? sessionFile.replace(/\.jsonl?$/, "").split("/").pop()
+    ? sessionFile
+        .replace(/\.jsonl?$/, "")
+        .split("/")
+        .pop()
     : undefined;
 
   const combined = await getCombinedSessionList({ excludeSessionId: currentSessionId });
@@ -178,11 +205,10 @@ async function showPickerAndSpawn(ctx: ExtensionContext): Promise<void> {
     return;
   }
 
-  const choices = combined.map((c) =>
-    c.status === "running"
-      ? `🟢 ${c.sessionName}  —  ${c.cwd}`
-      : `   ${c.sessionName}  —  ${c.cwd}`,
-  );
+  const choices = combined.map((c) => {
+    const icon = c.status === "stopped" ? "  " : c.unreadOutput ? "🔵" : "· ";
+    return `${icon} ${c.sessionName}  —  ${c.cwd}`;
+  });
 
   const picked = await ctx.ui.select("Pick a session", choices);
   if (picked === undefined) return;
@@ -207,19 +233,6 @@ async function showPickerAndSpawn(ctx: ExtensionContext): Promise<void> {
     if (!result.ok) {
       ctx.ui.notify(`Failed to spawn wezterm: ${result.error}`, "error");
     }
-  }
-}
-
-// ── Name refresh tracking ──────────────────────────────────────────
-
-let currentSessionInfo: ActiveSessionInfo | null = null;
-
-function refreshSessionName(pi: ExtensionAPI): void {
-  if (!currentSessionInfo) return;
-  const name = pi.getSessionName() || "";
-  if (name && name !== currentSessionInfo.sessionName) {
-    currentSessionInfo = { ...currentSessionInfo, sessionName: name };
-    registerSession(currentSessionInfo);
   }
 }
 
@@ -313,7 +326,7 @@ export default async function (pi: ExtensionAPI) {
     // Clean up stale entries from previous crashes
     cleanupStaleSessions();
 
-    currentSessionInfo = {
+    initSessionState({
       sessionId,
       sessionName,
       cwd: ctx.cwd,
@@ -321,28 +334,36 @@ export default async function (pi: ExtensionAPI) {
       paneId,
       pid: process.pid,
       startedAt: new Date().toISOString(),
-    };
-    registerSession(currentSessionInfo);
+      unreadOutput: false,
+    });
+
+    // Set up unread-tracking editor
+    ctx.ui.setEditorComponent((_tui, theme, keybindings) => {
+      const editor = new UnreadTrackingEditor(_tui, theme, keybindings);
+      currentEditor = editor;
+      return editor;
+    });
   });
 
   // Deregister on session_shutdown
   pi.on("session_shutdown", async (_event, ctx) => {
-    const sessionManager = ctx.sessionManager;
-    const sessionFile = sessionManager.getSessionFile();
-    if (!sessionFile) return;
-
-    const sessionId =
-      sessionFile
-        .replace(/\.jsonl?$/, "")
-        .split("/")
-        .pop() || "unknown";
-    deregisterSession(sessionId);
-    currentSessionInfo = null;
+    ctx.ui.setEditorComponent(undefined);
+    currentEditor = null;
+    clearSessionState();
   });
 
-  // Refresh running-sessions name when the prompt input reappears after agent work
+  // Refresh name and set unread flag when agent finishes
   pi.on("agent_end", () => {
-    refreshSessionName(pi);
+    // Refresh session name
+    const name = pi.getSessionName() || "";
+    const state = getSessionState();
+    if (state && name && name !== state.sessionName) {
+      updateSessionState({ sessionName: name });
+    }
+
+    // Mark unread output
+    updateSessionState({ unreadOutput: true });
+    currentEditor?.armClear();
   });
 
   // Show picker on --session-pick flag
