@@ -1,0 +1,10 @@
+{
+  "name": "pi-session-picker",
+  "version": "1.0.0",
+  "description": "Pi extension: pick recent sessions and resume in a new WezTerm tab",
+  "keywords": ["pi-package"],
+  "license": "MIT",
+  "pi": {
+    "extensions": [".pi/extensions"]
+  }
+}
