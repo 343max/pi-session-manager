@@ -12,7 +12,7 @@ import {
   listActiveSessions,
 } from "./running-sessions";
 
-const MAX_SESSIONS = 20;
+const MAX_SESSIONS = 200;
 
 // ── Shared session list helper ──────────────────────────────────────
 
